@@ -1,9 +1,12 @@
-from sclib import SoundcloudAPI, Track, Playlist
+#from sclib import SoundcloudAPI, Track, Playlist
+from sclib.asyncio import SoundcloudAPI, Track, Playlist
 import telebot
+from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 from datetime import datetime
 import configparser
 import os, shutil
+import asyncio
 import colorama as cl
 from tqdm import tqdm, trange
         
@@ -33,17 +36,16 @@ except Exception as error:
 #setting up a bot  
 try:  
     print(f"[{timestamp}]", tag_info, "Initializing Telegram bot...")
-    bot = telebot.TeleBot(TOKEN, parse_mode = 'markdown')
+    bot = AsyncTeleBot(TOKEN, parse_mode = 'markdown')
 except Exception as error:
     print(f"[{timestamp}]", tag_error, f"Cause: {error}")
 
 #connecting to Soundcloud API
 try:
     print(f"[{timestamp}]", tag_info, "Connecting to Soundcloud API...")
-    api = SoundcloudAPI(client_id=CLIENTID)
+    api = SoundcloudAPI(client_id='ovyZZ34xgflQFUDCXvS4D07GsPUibGLg')
 except Exception as error:
     print(f"[{timestamp}]", tag_error, f"Cause: {error}")
-    
 
 def clear_title(text: str,pattern: dict = {}) -> str:
     """this function clears filename string from forbidden characters if another pattern is not given and returns result as a string.
@@ -64,8 +66,8 @@ def clear_title(text: str,pattern: dict = {}) -> str:
             text = text.replace(old, new)
     return text
 
-def fetch_playlist(message, link_to_playlist: str):
-    playlist = api.resolve(link_to_playlist)
+async def fetch_playlist(message, link_to_playlist: str):
+    playlist = await api.resolve(link_to_playlist)
     assert type(playlist) is Playlist
     
     #creation of the main folder
@@ -79,28 +81,34 @@ def fetch_playlist(message, link_to_playlist: str):
     if not os.path.isdir(path):
         print(f"[{timestamp}]", tag_info, f"Creating {path} folder...")
         os.mkdir(path)
-
+    
     #cycling throught playlist to download each track
     pbar = tqdm(playlist.tracks)
     for track in pbar:
+        assert type(track) is Track
         clear_title(track.title)
         trackname = f'{track.artist} - {track.title}.mp3'
         pbar.set_description(f'Downloading {trackname}')
         filename = f'{path}/{trackname}'
         try:
             with open(filename, 'wb+') as file:
-                track.write_mp3_to(file)
+                await bot.send_chat_action(message.chat.id, 'record_audio')
+                await track.write_mp3_to(file)
                 print(f"[{timestamp}]", tag_info, "Track is saved.")
                 audio = open(filename, 'rb')
-                bot.send_audio(message.chat.id, audio)
+                await bot.send_chat_action(message.chat.id, 'upload_audio')
+                await bot.send_audio(message.chat.id, audio, caption = f"[Track Cover]({track.artwork_url}) | [Source]({track.permalink_url})", reply_to_message_id=message.message_id)
                 print(f"[{timestamp}]", tag_info, "Track is sent to user.")
         except Exception as error:
             print(f"[{timestamp}]", tag_error, f"Cause: {error}")
-    #shutil.rmtree(path)
-    #print(f"[{timestamp}]", tag_info, f"Playlist {path} is cleared.")
+            if "cannot be downloaded" in str(error):
+                await bot.send_message(message.chat.id, f"Unfortunately, track {trackname} is not marked as Downloadable and so cannot be downloaded.")
+    print(f"[{timestamp}]", tag_info, "Finished sending playlist.")
+    shutil.rmtree(path)
+    print(f"[{timestamp}]", tag_info, f"Playlist {path} is cleared.")
 
-def fetch_track(message, link_to_track: str):
-    track = api.resolve(link_to_track)
+async def fetch_track(message, link_to_track: str):
+    track = await api.resolve(link_to_track)
     assert type(track) is Track
     #creation of the main folder
     path = f'./soundcloud'
@@ -117,49 +125,54 @@ def fetch_track(message, link_to_track: str):
     filename = f'{path}/{trackname}'
     try:
         with open(filename, 'wb+') as file:
-            track.write_mp3_to(file)
+            await bot.send_chat_action(message.chat.id, 'record_audio')
+            await track.write_mp3_to(file)
             print(f"[{timestamp}]", tag_info, "Track is saved.")
             audio = open(filename, 'rb')
-            bot.send_audio(message.chat.id, audio)
+            await bot.send_chat_action(message.chat.id, 'upload_audio')
+            await bot.send_audio(message.chat.id, audio, caption = f"[Track Cover]({track.artwork_url}) | [Source]({track.permalink_url})", reply_to_message_id=message.message_id)
             print(f"[{timestamp}]", tag_info, "Track is sent to user.")
+        os.remove(filename)
+        print(f"[{timestamp}]", tag_info, f"Track {filename} is cleared.")
     except Exception as error:
         print(f"[{timestamp}]", tag_error, f"Cause: {error}")
         if "cannot be downloaded" in str(error):
-            bot.send_message(message.chat.id, f"Unfortunately, track {trackname} is not marked as Downloadable and so cannot be downloaded.")
-
+            await bot.send_message(message.chat.id, f"Unfortunately, track {trackname} is not marked as Downloadable and so cannot be downloaded.")
+        os.remove(filename)
+        print(f"[{timestamp}]", tag_info, f"Track {filename} is cleared.")
 #desctibing bot's handlers
 @bot.message_handler(commands = ['start'])
-def start(message):
+async def start(message):
     text = f'''Greetings, {message.from_user.first_name}!
 I'm bot that helps downloading tracks and full playlists from **Soundcloud**.
 Just send me the corresponding Soundcloud link and I will reply with the audio message.
     
-by Ewenn'''
-    bot.send_message(message.chat.id, text)
+by E.H.J.'''
+    await bot.send_message(message.chat.id, text)
                   
 @bot.message_handler(commands = ['help'])
-def help(message):
-    text = '''Send me link to the song or playlist, and I will send you track here.
+async def help(message):
+    text = f'''Send me link to the song or playlist, and I will send you track here.
 If error occur in the process - firstly make sure that the link is correct and the song is available.
-After that please try and send the message again. If the error is still occurring, don't hesitate contacting me (@nmanshin)'''
-    bot.send_message(message.chat.id, text)  
+After that please try and send the message again. If the error is still occurring, don't hesitate contacting me ([E.H.J.](t.me/nmanshin))'''
+    await bot.send_message(message.chat.id, text)  
   
 @bot.message_handler(content_types = ['text'])
-def get_user_text(message):
+async def get_user_text(message):
     link = message.text
-    result = api.resolve(link)
+    result = await api.resolve(link)
     if type(result).__name__ == "Playlist":
-        fetch_playlist(message, link)
+        await fetch_playlist(message, link)
     elif type(result).__name__ == "Track":
-        fetch_track(message, link)
+        await fetch_track(message, link)
     else:
-        bot.send_message(message.chat.id, 'I dont know what is this link for.\nPlease try another one.')  
+        await bot.send_message(message.chat.id, 'I dont know what is this link for.\nPlease try another one.')  
 
           
-
+#launching bot
 print(f"[{timestamp}]", tag_info, "Bot Started...")
 try:
-    bot.infinity_polling()
+    asyncio.run(bot.polling())
 except Exception as error:
     print(f"[{timestamp}]", tag_error, f"Cause: {error}")
     
